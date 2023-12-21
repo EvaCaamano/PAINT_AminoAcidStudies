@@ -1,0 +1,305 @@
+---
+title: "PAINTstudies_AminoAcidStudies"
+author: "Dr. Eva Caama&#241;o-Guti&#233;rrez - Computational Biology Facility"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+We start by loading the packages and functions needed
+
+```{r,warning=F,message=F,tidy=T}
+library(limma)
+library(samr)
+library(psych)
+library(gplots)
+library(ggpubr)
+library(conover.test)
+library(gtools) #for stars.pval
+
+source("PAINTfunctions.R")
+
+```
+
+# 1. Input data and some exploratory analysis
+
+Upon exploratory analysis using all the dataset we do not observe any particular structure.
+```{r }
+aaPaint<-read.csv("data/PAINTStudiesBiochemDat.csv")
+
+aaPaint$TimePoint<-factor(aaPaint$TimePoint,levels=c("Day3","Day10"),ordered = T)
+
+str(aaPaint)
+
+
+#PCA plots (not taking into account IVArg)
+do_PCA_Plot_Nov16((aaPaint[,6:30]),groups = aaPaint$LevelIntervention,legendName = "Arg \n Suppl",scale=F)
+
+do_PCA_Plot_Nov16((aaPaint[,6:30]),groups = aaPaint$TimePoint,legendName = "time",scale=F)
+
+do_PCA_Plot_Nov16((aaPaint[,6:30]),groups = paste(aaPaint$LevelIntervention,aaPaint$TimePoint,sep=""),legendName = "",scale=T)
+
+#PCA plot of day 10 coloured by intervention - no structure appreciated
+do_PCA_Plot_Nov16((aaPaint[aaPaint$TimePoint=="Day10",6:30]),groups = aaPaint[aaPaint$TimePoint=="Day10","LevelIntervention"],legendName = "",scale=F)
+
+```
+
+# 2. Study correlation of plasma Arginine with IV Arginine intake
+
+Using only the data available for patients on the intervention for PAINT18. We can see from the analysis shown below that while at day 3 there is no correlation between intake and levels of arginine, by day 10 there is a strong correlation (Spearman correlation 0.73 with p value <0.001). It is interesting to see that the patients that were on enteral feeds (zero levels at Day 10 for IV Arginine), show relatively low levels of Arginine. Note patient 1824 died the day after D10 sample. 
+
+```{r,message=F,warning=F,fig.width=10}
+ArgCorre<-aaPaint[!is.na(aaPaint$ArgIVIntake),]
+ArgCorre$TimePoint<-factor(ArgCorre$TimePoint,levels=c("Day3","Day10"),ordered = T)
+
+ggplot(data=ArgCorre,aes(x=Arg,y=ArgIVIntake))+
+  geom_point()+ggrepel::geom_label_repel(aes(label=PatientID),box.padding=0.35,point.padding = 0.5,segment.color="grey50")+facet_wrap(~TimePoint,scales="free_x")+
+  geom_smooth(aes(x=Arg,y=ArgIVIntake),method='lm')+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10))+
+  xlab("Arginine levels plasma")+ylab("Arginine IV Intake")+
+  stat_cor(aes(x=Arg,y=ArgIVIntake),method="spearman", col="blue",label.y = 775)+
+  theme_bw(base_size = 16)
+
+
+
+```
+
+# 3. Statistical analysis of total essential aminoacids, plasma arginine and amonia
+
+We start by producing some visualisations
+
+```{r,message=F,warning=F,fig.width=10}
+aaPaintM<-melt(aaPaint[,-ncol(aaPaint)],id.vars=c("Study","Group","LevelIntervention","TimePoint","PatientID"))
+aaPaintM$variable<-as.character(aaPaintM$variable)
+
+aaPaintM_EAA_Arg_Am<-aaPaintM[aaPaintM$variable%in%c("Total.EAA","Arg","Ammonia"),]
+
+ggplot(data=aaPaintM_EAA_Arg_Am)+
+  geom_boxplot(aes(x=LevelIntervention, y=value,fill=TimePoint),col="black")+
+  geom_point(aes(x=LevelIntervention, y=value,fill=TimePoint,shape=Study),position=position_jitterdodge(dodge.width=0.9),col="black",alpha=0.4,pch=21)+
+  facet_wrap(~variable,scales="free")+
+  ylab("")+
+  scale_fill_manual(values = c("#DCE319FF","#33638DFF"))+
+  scale_colour_manual(values = c("#DCE319FF","#33638DFF"))+
+  scale_shape_manual(values=c(21,22,23))+
+  theme_bw(base_size = 16)+theme(legend.position = "bottom")
+
+aaPaintM_sel<-aaPaintM[aaPaintM$variable%in%c("Total.EAA","Arg","Ammonia","Cit","Orn"),]
+
+ggplot(data=aaPaintM_sel)+
+  geom_boxplot(aes(x=LevelIntervention, y=value,fill=TimePoint),col="black")+
+  geom_point(aes(x=LevelIntervention, y=value,fill=TimePoint,shape=Study),position=position_jitterdodge(dodge.width=0.9),col="black",alpha=0.4,pch=21)+
+  facet_wrap(~variable,scales="free")+
+  ylab("")+
+  scale_fill_manual(values = c("#DCE319FF","#33638DFF"))+
+  scale_colour_manual(values = c("#DCE319FF","#33638DFF"))+
+  scale_shape_manual(values=c(21,22,23))+
+  theme_bw(base_size = 16)+theme(legend.position = "bottom")
+```
+
+## Comparisons for Day 10
+
+Upon data exploration the statistical test chosen to look at the differences at day 10 for each metabolite is a Kruskal-Wallis, corrected for FDR with Benjamini-Hochberg followed by a Conover-Iman test as post-Hoc. Significant aminoacids shown in boxplots with standard significance values. 
+
+```{r,message=F,warning=F}
+qqnorm(aaPaint$Arg)#no
+shapiro.test(aaPaint$Arg)
+qqnorm(aaPaint$Ammonia)#yes
+shapiro.test(aaPaint$Ammonia)
+qqnorm(aaPaint$Total.EAA)#No
+shapiro.test(aaPaint$Total.EAA)
+
+#with the above prelim tests it is better to undertake a non-parametric test
+```
+
+```{r,message=F,warning=F,include=T}
+#we'll start by doing a Kruskall Wallis at all the day 10 measurements followed by post-hoc with conover test
+
+
+aaPaint_D10<-aaPaint[aaPaint$TimePoint=="Day10",]
+KW_all_pvals<-apply(aaPaint_D10[,6:30],2,function(x){kruskal.test(x,aaPaint_D10$LevelIntervention)$p.value})
+
+#we correct for FDR and we select the significant for the posthoc
+
+KW_all_pvals_adj<-p.adjust(KW_all_pvals,method = "BH")
+
+
+
+namesSig<-names(KW_all_pvals_adj[KW_all_pvals_adj<0.05])#we get 8 significant 
+forConover<-aaPaint_D10[,colnames(aaPaint_D10)%in%namesSig]
+
+
+
+KW_conoverIman_postHoc<-do.call(rbind,lapply(lapply(forConover,conover.test, g=aaPaint_D10$LevelIntervention,list=T,method="BH",label=T,table=F),as.data.frame))
+
+
+KW_conoverIman_postHoc$AminoAcid<-strsplit2(rownames(KW_conoverIman_postHoc),"[.]")[,1]
+```
+This is the table with the post-hoc analysis for the significant aminoacids.
+```{r,message=F,warning=F}
+KW_conoverIman_postHoc[KW_conoverIman_postHoc$AminoAcid%in%c("Total"),"AminoAcid"]<-"Total.EAA"
+
+KW_conoverIman_postHoc[,c(6,5,2,4)]
+
+write.csv(KW_conoverIman_postHoc,"D10_KW_ConoverImanPH.csv")
+```
+
+Now we generate a plot with the results of the significant aminoacids. 
+
+```{r,message=F,warning=F}
+
+aaPaintM_D10_sig<-aaPaintM[aaPaintM$TimePoint=="Day10" & aaPaintM$variable%in%namesSig,]
+colnames(aaPaintM_D10_sig)[6]<-"aminoacid"
+
+KW_conoverIman_postHoc$group1<-strsplit2(KW_conoverIman_postHoc$comparisons," - ")[,1]
+KW_conoverIman_postHoc$group2<-strsplit2(KW_conoverIman_postHoc$comparisons," - ")[,2]
+ypos<-apply(aaPaint[,namesSig],2,max,na.rm=T)*1.12
+KW_conoverIman_postHoc$y.position<-ypos[match(KW_conoverIman_postHoc$AminoAcid,names(ypos))]
+KW_conoverIman_postHoc$StatSig<-stars.pval(KW_conoverIman_postHoc$P.adjusted)
+KW_conoverIman_postHoc$StatSig[KW_conoverIman_postHoc$StatSig==" "]<-"NS"
+
+KW_conoverIman_postHoc[,c(6,5,2,4)]
+write.csv(KW_conoverIman_postHoc[,c(6,5,2,4)],"ConoverImanResults.csv")
+
+for(i in namesSig){
+paa<-ggplot(data=aaPaintM_D10_sig[aaPaintM_D10_sig$aminoacid==i,],aes(x=LevelIntervention))+
+  geom_boxplot(aes(x=LevelIntervention, y=value),col="black")+
+  geom_jitter(aes(x=LevelIntervention, y=value),col="black",alpha=0.6,pch=16)+
+  facet_wrap(~aminoacid,scales="free")+
+  ylab("")+xlab("")+
+  theme_classic(base_size = 16)+theme(legend.position = "bottom")
+
+
+
+paa2<-paa+stat_pvalue_manual(data=KW_conoverIman_postHoc[KW_conoverIman_postHoc$AminoAcid==i,],label="StatSig",step.increase = c(0,0.1,0.1))
+ 
+
+ggsave(plot = paa2,filename = paste("FigBiochem/",i,"_Day10_boxplot.png",sep = ""))
+
+print(paa2)
+
+}
+
+```
+
+## Comparisons for day 3
+
+While the first strategy included looking at comparisons between the three groups, as clarified by the clinical team not all the studies are equivalent as some started the intervention after the sample was taken (PAINT 18). Hence Day 3 comparisons will be done in a 3-side non parametric test 
+
+
+### Day 3 PAINT 18 data
+```{r,warning=F,include=T}
+
+#for PAINT18
+aaPaint_D3_PAINT18<-aaPaint[aaPaint$TimePoint=="Day3" & aaPaint$Study=="PAINT18",]
+D3PAINT18_stats_pvals<-sapply(6:30,function(x){
+  wilcox.test(x = aaPaint_D3_PAINT18[aaPaint_D3_PAINT18$LevelIntervention=="Standard_6",x],
+              y = aaPaint_D3_PAINT18[aaPaint_D3_PAINT18$LevelIntervention=="High-18",x])$p.value})
+
+D3PAINT18_stats<-data.frame("aminoacid"=colnames(aaPaint_D3_PAINT18)[6:30],"pvalue"=D3PAINT18_stats_pvals,"Padj"=p.adjust(D3PAINT18_stats_pvals,method = "BH"))
+
+write.csv(D3PAINT18_stats,"D3PAINT18_CvsIComparison_SuppTable3.csv")
+
+```
+
+### Day 3 PAINT data
+```{r, warning=F, include=T}
+aaPaint_D3_PAINT<-aaPaint[aaPaint$TimePoint=="Day3" & aaPaint$Study%in%c("PAINT","PAINT-NH3"),]
+
+D3PAINT_stats_pvals<-sapply(6:30,function(x){
+  wilcox.test(x = aaPaint_D3_PAINT[aaPaint_D3_PAINT$LevelIntervention=="Standard_6",x],
+              y = aaPaint_D3_PAINT[aaPaint_D3_PAINT$LevelIntervention=="Moderate",x])$p.value})
+
+D3PAINT_stats<-data.frame("aminoacid"=colnames(aaPaint_D3_PAINT)[6:30],"pvalue"=D3PAINT_stats_pvals,"Padj"=p.adjust(D3PAINT_stats_pvals,method = "BH"))
+
+D3PAINT_stats$medianControl<-apply(aaPaint_D3_PAINT[aaPaint_D3_PAINT$LevelIntervention=="Standard_6",6:30],2,median,na.rm=T)
+D3PAINT_stats$medianInterv<-apply(aaPaint_D3_PAINT[aaPaint_D3_PAINT$LevelIntervention=="Moderate",6:30],2,median,na.rm=T)
+D3PAINT_stats$IQR_Control<-apply(aaPaint_D3_PAINT[aaPaint_D3_PAINT$LevelIntervention=="Standard_6",6:30],2,IQR,na.rm=T)
+D3PAINT_stats$IQR_Interv<-apply(aaPaint_D3_PAINT[aaPaint_D3_PAINT$LevelIntervention=="Moderate",6:30],2,IQR,na.rm=T)
+
+write.csv(D3PAINT_stats,"D3PAINT_CvsIComparison_SuppTable2.csv")
+
+
+apply(aaPaint_D3_PAINT[aaPaint_D3_PAINT$LevelIntervention=="Standard_6",6:30],2,quantile,na.rm=T)
+apply(aaPaint_D3_PAINT[aaPaint_D3_PAINT$LevelIntervention=="Moderate",6:30],2,quantile,na.rm=T)
+
+```
+
+### Day 30 PAINT 18 data
+
+```{r,warning=F,include=T}
+
+#for PAINT18
+aaPaintWithD30<-read.csv("data/PAINTStudiesBiochemDat_withD30.csv")
+aaPaint_D30_PAINT18<-aaPaintWithD30[aaPaintWithD30$TimePoint=="Day30" & aaPaintWithD30$Study=="PAINT18",]
+D30PAINT18_stats_pvals<-sapply(6:30,function(x){
+  wilcox.test(x = aaPaint_D30_PAINT18[aaPaint_D30_PAINT18$LevelIntervention=="Standard_6",x],
+              y = aaPaint_D30_PAINT18[aaPaint_D30_PAINT18$LevelIntervention=="High-18",x],na.rm=T)$p.value})
+
+D30PAINT18_stats<-data.frame("aminoacid"=colnames(aaPaint_D30_PAINT18)[6:30],"pvalue"=D30PAINT18_stats_pvals,"Padj"=p.adjust(D30PAINT18_stats_pvals,method = "BH"))
+
+write.csv(D30PAINT18_stats,"D30PAINT18_CvsIComparison_SuppTable4.csv")
+
+```
+
+
+
+
+
+
+Below find preparation of some of the figures asked by the medical team for the manuscript:
+
+
+```{r,warning=F,message=F, out.width="100%"}
+#boxplots comparing key variables at day 3
+
+aaPaintM<-melt(aaPaint[,-ncol(aaPaint)],id.vars=c("Study","Group","LevelIntervention","TimePoint","PatientID"))
+aaPaintM$variable<-as.character(aaPaintM$variable)
+
+aaPaintM_EAA_Arg_Am_Day3<-aaPaintM[aaPaintM$variable%in%c("Total.EAA","Arg","Ammonia","Gln","Cit","Orn") & aaPaintM$TimePoint=="Day3",]
+
+
+boxplotD3<-ggplot(data=aaPaintM_EAA_Arg_Am_Day3)+
+  geom_boxplot(aes(x=LevelIntervention, y=value),col="black",outlier.color = "white")+
+  geom_point(aes(x=LevelIntervention, y=value,shape=Study),alpha=0.6)+
+  facet_wrap(~variable,scales="free")+
+  ylab("Abundance")+ xlab("Intervention")+
+  theme_classic(base_size = 12)+theme(legend.position = "bottom")
+boxplotD3
+
+
+#Day 10
+aaPaintM_EAA_Arg_Am_Day10<-aaPaintM[aaPaintM$variable%in%c("Total.EAA","Arg","Ammonia","Gln","Cit","Orn") & aaPaintM$TimePoint=="Day10",]
+
+aaPaintM_EAA_Arg_Am_Day10$variable<-factor(aaPaintM_EAA_Arg_Am_Day10$variable,ordered=T,levels=c("Arg","Total.EAA","Ammonia","Orn","Cit","Gln"))
+aaPaintM_EAA_Arg_Am_Day10$Study[aaPaintM_EAA_Arg_Am_Day10$Study%in%c("PAINT","PAINT-NH3")]<-"PAINT"
+
+boxplotD10<-ggplot(data=aaPaintM_EAA_Arg_Am_Day10)+
+  geom_boxplot(aes(x=LevelIntervention, y=value),col="black",outlier.color = "white")+
+  geom_point(aes(x=LevelIntervention, y=value,shape=Study),alpha=0.6)+
+  facet_wrap(~variable,scales="free")+
+  ylab("Abundance")+ xlab("Intervention")+
+  theme_classic(base_size = 12)+theme(legend.position = "bottom")
+boxplotD10
+ggsave(plot=boxplotD10,filename = "D10_SelectedAminoAcids.png",device = "png",dpi = 300,width=8,units = "in")
+
+ggplot(data=aaPaintM[aaPaintM$variable%in%c("Total.EAA","Arg","Ammonia","Gln","Cit","Orn"),])+
+  geom_boxplot(aes(x=LevelIntervention, y=value, fill=TimePoint),col="black",outlier.color = "white")+
+  geom_point(aes(x=LevelIntervention, y=value,shape=Study,col=TimePoint,fill=TimePoint),alpha=0.6,position=position_jitterdodge(dodge.width=0.9))+
+  scale_fill_manual(values = c("darkgrey","skyblue"))+
+  scale_colour_manual(values = c("darkgrey","skyblue"))+
+  facet_wrap(~variable,scales="free")+
+  ylab("Abundance")+ xlab("Intervention")+
+  theme_classic(base_size = 12)+theme(legend.position = "bottom")
+
+
+
+```
+
+
+
+
